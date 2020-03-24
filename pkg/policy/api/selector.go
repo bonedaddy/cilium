@@ -17,6 +17,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	slim_metav1 "github.com/cilium/cilium/pkg/k8s/slim/k8s/apis/meta/v1"
@@ -32,6 +33,7 @@ import (
 var log = logging.DefaultLogger.WithField(logfields.LogSubsys, "policy-api")
 
 // EndpointSelector is a wrapper for k8s LabelSelector.
+// +deepequal-gen:private-method=true
 type EndpointSelector struct {
 	*slim_metav1.LabelSelector
 
@@ -39,6 +41,7 @@ type EndpointSelector struct {
 	// LabelSelector, which allows more efficient matching in Matches().
 	//
 	// Kept as a pointer to allow EndpointSelector to be used as a map key.
+	// +deepequal-gen=false
 	requirements *k8sLbls.Requirements
 
 	// cachedString is the cached representation of the LabelSelector for this
@@ -46,6 +49,21 @@ type EndpointSelector struct {
 	// via `NewESFromMatchRequirements`. It is immutable after its creation.
 	cachedLabelSelectorString string
 }
+
+func (in *EndpointSelector) DeepEqual(other *EndpointSelector) bool {
+	switch {
+	case (in == nil) != (other == nil):
+		return false
+	case (in == nil) && (other == nil):
+		return true
+	}
+	// Once k8s upstream library supports DeepEqual we can remove this reflect
+	if !reflect.DeepEqual(in.requirements, other.requirements) {
+		return false
+	}
+	return in.deepEqual(other)
+}
+
 
 // LabelSelectorString returns a user-friendly string representation of
 // EndpointSelector.

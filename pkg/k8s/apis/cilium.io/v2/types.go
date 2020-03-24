@@ -138,6 +138,16 @@ type Timestamp struct {
 	time.Time
 }
 
+func (in *Timestamp) DeepEqual(other *Timestamp) bool {
+	switch {
+	case (in == nil) != (other == nil):
+		return false
+	case (in == nil) && (other == nil):
+		return true
+	}
+	return in.Time.Equal(other.Time)
+}
+
 // DeepCopyInto creates a deep-copy of the Time value.  The underlying time.Time
 // type is effectively immutable in the time API, so it is safe to
 // copy-by-assign, despite the presence of (unexported) Pointer fields.
@@ -191,7 +201,7 @@ func (r *CiliumNetworkPolicy) SpecEquals(o *CiliumNetworkPolicy) bool {
 	if o == nil {
 		return r == nil
 	}
-	return r.Spec.DeepEquals(o.Spec) && r.Specs.DeepEquals(o.Specs)
+	return r.Spec.DeepEqual(o.Spec) && r.Specs.DeepEqual(o.Specs)
 }
 
 // AnnotationsEquals returns true if ObjectMeta.Annotations of each
