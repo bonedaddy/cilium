@@ -27,7 +27,9 @@ import (
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
 	"github.com/cilium/cilium/pkg/endpointmanager/idallocator"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	"github.com/cilium/cilium/pkg/k8s"
 	"github.com/cilium/cilium/pkg/labels"
+	"github.com/cilium/cilium/pkg/labelsfilter"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -279,6 +281,18 @@ func (mgr *EndpointManager) LookupPodName(name string) *endpoint.Endpoint {
 	return ep
 }
 
+// LookupHostEndpoint returns the host endpoint.
+func (mgr *EndpointManager) LookupHostEndpoint() *endpoint.Endpoint {
+	mgr.mutex.RLock()
+	defer mgr.mutex.RUnlock()
+	for _, ep := range mgr.endpoints {
+		if ep.IsHost() {
+			return ep
+		}
+	}
+	return nil
+}
+
 // ReleaseID releases the ID of the specified endpoint from the EndpointManager.
 // Returns an error if the ID cannot be released.
 func (mgr *EndpointManager) ReleaseID(ep *endpoint.Endpoint) error {
@@ -474,10 +488,24 @@ func (mgr *EndpointManager) AddHostEndpoint(ctx context.Context, owner regenerat
 		return err
 	}
 
+	epLabels := labels.Labels{}
+	epLabels.MergeLabels(labels.LabelHost)
+
+	if k8s.IsEnabled() {
+		// Retrieve k8s labels.
+		if k8sNode, err := k8s.GetNode(k8s.Client(), nodeName); err != nil {
+			log.WithError(err).Warning("Kubernetes node resource representing own node is not available, cannot set Labels")
+		} else {
+			newLabels := labels.Map2Labels(k8sNode.GetLabels(), labels.LabelSourceK8s)
+			newIdtyLabels, _ := labelsfilter.Filter(newLabels)
+			epLabels.MergeLabels(newIdtyLabels)
+		}
+	}
+
 	// Give the endpoint a security identity
 	newCtx, cancel := context.WithTimeout(ctx, launchTime)
 	defer cancel()
-	ep.UpdateLabels(newCtx, labels.LabelHost, nil, true)
+	ep.UpdateLabels(newCtx, epLabels, nil, true)
 	if newCtx.Err() == context.DeadlineExceeded {
 		log.WithError(newCtx.Err()).Warning("Timed out while updating security identify for host endpoint")
 	}
@@ -522,12 +550,5 @@ func (mgr *EndpointManager) EndpointExists(id uint16) bool {
 
 // HostEndpointExists returns true if the host endpoint exists.
 func (mgr *EndpointManager) HostEndpointExists() bool {
-	mgr.mutex.RLock()
-	defer mgr.mutex.RUnlock()
-	for _, ep := range mgr.endpoints {
-		if ep.IsHost() {
-			return true
-		}
-	}
-	return false
+	return mgr.LookupHostEndpoint() != nil
 }

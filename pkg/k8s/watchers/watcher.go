@@ -70,6 +70,7 @@ const (
 	metricCiliumNode     = "CiliumNode"
 	metricCiliumEndpoint = "CiliumEndpoint"
 	metricPod            = "Pod"
+	metricNode           = "Node"
 	metricService        = "Service"
 	metricCreate         = "create"
 	metricDelete         = "delete"
@@ -106,6 +107,7 @@ var (
 type endpointManager interface {
 	GetEndpoints() []*endpoint.Endpoint
 	LookupPodName(string) *endpoint.Endpoint
+	LookupHostEndpoint() *endpoint.Endpoint
 	WaitForEndpointsAtPolicyRev(ctx context.Context, rev uint64) error
 }
 
@@ -463,6 +465,9 @@ func (k *K8sWatcher) EnableK8sWatcher(queueSize uint) error {
 	// kubernetes pods
 	asyncControllers.Add(1)
 	go k.podsInit(k8s.WatcherCli(), asyncControllers)
+
+	// kubernetes nodes
+	k.nodesInit(k8s.Client())
 
 	// kubernetes namespaces
 	asyncControllers.Add(1)
