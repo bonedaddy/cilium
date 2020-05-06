@@ -17,6 +17,8 @@ package link
 import (
 	"fmt"
 
+	"github.com/cilium/cilium/pkg/mac"
+
 	"github.com/vishvananda/netlink"
 )
 
@@ -42,4 +44,12 @@ func Rename(curName, newName string) error {
 	}
 
 	return netlink.LinkSetName(link, newName)
+}
+
+func GetHardwareAddr(ifName string) (mac.MAC, error) {
+	iface, err := netlink.LinkByName(ifName)
+	if err != nil {
+		return nil, err
+	}
+	return mac.MAC(iface.Attrs().HardwareAddr), nil
 }

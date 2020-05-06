@@ -24,6 +24,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/datapath"
+	"github.com/cilium/cilium/pkg/datapath/link"
 	"github.com/cilium/cilium/pkg/datapath/linux/route"
 	"github.com/cilium/cilium/pkg/datapath/loader/metrics"
 	"github.com/cilium/cilium/pkg/defaults"
@@ -41,6 +42,11 @@ const (
 
 	symbolFromEndpoint = "from-container"
 	symbolToEndpoint   = "to-container"
+
+	symbolFromHostNetdevEp = "from-netdev"
+	symbolToHostNetdevEp   = "to-netdev"
+	symbolFromHostEp       = "from-host"
+	symbolToHostEp         = "to-host"
 
 	dirIngress = "ingress"
 	dirEgress  = "egress"
@@ -99,10 +105,99 @@ func removeEndpointRoute(ep datapath.Endpoint, ip net.IPNet) error {
 	})
 }
 
+// We need this function when patching an object file for which symbols were
+// already substituted. During the first symbol substitutions, string symbols
+// were replaced such that:
+//   template_string -> string_for_endpoint
+// Since we only want to replace one int symbol, we can nullify string
+// substitutions with:
+//   string_for_endpoint -> string_for_endpoint
+// We cannot simply pass an empty map as the agent would complain that some
+// symbol had no corresponding values.
+func nullifyStringSubstitutions(strings map[string]string) map[string]string {
+	nullStrings := make(map[string]string)
+	for _, v := range strings {
+		nullStrings[v] = v
+	}
+	return nullStrings
+}
+
+// Since we attach the host endpoint datapath to two different interfaces, we
+// need two different NODE_MAC values. patchHostNetdevDatapath creates a new
+// object file for the native device, from the object file for the host device
+// (cilium_host).
+// Since the two object files should only differ by the values of their
+// NODE_MAC symbols, we can avoid a full compilation.
+func patchHostNetdevDatapath(ep datapath.Endpoint, objPath, ifName string) error {
+	hostObj, err := elf.Open(objPath)
+	if err != nil {
+		return err
+	}
+	defer hostObj.Close()
+
+	mac, err := link.GetHardwareAddr(ifName)
+	if err != nil {
+		return err
+	}
+	opts, strings := ELFSubstitutions(ep)
+	opts["NODE_MAC_1"] = sliceToBe32(mac[0:4])
+	opts["NODE_MAC_2"] = uint32(sliceToBe16(mac[4:6]))
+	dstPath := path.Join(ep.StateDir(), hostEndpointNetdevObj)
+	strings = nullifyStringSubstitutions(strings)
+	return hostObj.Write(dstPath, opts, strings)
+}
+
+func (l *Loader) reloadHostDatapath(ctx context.Context, ep datapath.Endpoint, objPath string) error {
+	symbols := [4]string{symbolToHostEp, symbolFromHostEp, symbolFromHostNetdevEp, symbolToHostNetdevEp}
+	directions := [4]string{dirIngress, dirEgress, dirIngress, dirEgress}
+
+	interfaceNames := make([]string, 2, 4)
+	interfaceNames[0] = ep.InterfaceName()
+	interfaceNames[1] = interfaceNames[0]
+	if option.Config.Device != "undefined" {
+		interfaceNames = append(interfaceNames, option.Config.Device)
+		if option.Config.EnableNodePort {
+			interfaceNames = append(interfaceNames, option.Config.Device)
+		}
+	}
+
+	if len(interfaceNames) > 2 {
+		if err := patchHostNetdevDatapath(ep, objPath, interfaceNames[2]); err != nil {
+			return err
+		}
+	}
+
+	for i, interfaceName := range interfaceNames {
+		dir := directions[i]
+		symbol := symbols[i]
+		if err := l.replaceDatapath(ctx, interfaceName, objPath, symbol, dir); err != nil {
+			scopedLog := ep.Logger(Subsystem).WithFields(logrus.Fields{
+				logfields.Path: objPath,
+				logfields.Veth: interfaceName,
+			})
+			// Don't log an error here if the context was canceled or timed out;
+			// this log message should only represent failures with respect to
+			// loading the program.
+			if ctx.Err() == nil {
+				scopedLog.WithError(err).Warningf("JoinEP: Failed to load program for host endpoint (%s)", symbol)
+			}
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (l *Loader) reloadDatapath(ctx context.Context, ep datapath.Endpoint, dirs *directoryInfo) error {
 	// Replace the current program
 	objPath := path.Join(dirs.Output, endpointObj)
-	if ep.HasIpvlanDataPath() {
+
+	if ep.IsHost() {
+		objPath = path.Join(dirs.Output, hostEndpointObj)
+		if err := l.reloadHostDatapath(ctx, ep, objPath); err != nil {
+			return err
+		}
+	} else if ep.HasIpvlanDataPath() {
 		if err := graftDatapath(ctx, ep.MapPath(), objPath, symbolFromEndpoint); err != nil {
 			scopedLog := ep.Logger(Subsystem).WithFields(logrus.Fields{
 				logfields.Path: objPath,
@@ -163,7 +258,7 @@ func (l *Loader) reloadDatapath(ctx context.Context, ep datapath.Endpoint, dirs 
 func (l *Loader) compileAndLoad(ctx context.Context, ep datapath.Endpoint, dirs *directoryInfo, stats *metrics.SpanStat) error {
 	debug := option.Config.BPFCompilationDebug
 	stats.BpfCompilation.Start()
-	err := compileDatapath(ctx, dirs, debug, ep.Logger(Subsystem))
+	err := compileDatapath(ctx, dirs, ep.IsHost(), debug, ep.Logger(Subsystem))
 	stats.BpfCompilation.End(err == nil)
 	if err != nil {
 		return err
@@ -243,7 +338,11 @@ func (l *Loader) CompileOrLoad(ctx context.Context, ep datapath.Endpoint, stats 
 	}
 
 	stats.BpfWriteELF.Start()
-	dstPath := path.Join(ep.StateDir(), endpointObj)
+	epObj := endpointObj
+	if ep.IsHost() {
+		epObj = hostEndpointObj
+	}
+	dstPath := path.Join(ep.StateDir(), epObj)
 	opts, strings := ELFSubstitutions(ep)
 	if err = template.Write(dstPath, opts, strings); err != nil {
 		stats.BpfWriteELF.End(err == nil)
