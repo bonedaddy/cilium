@@ -17,6 +17,7 @@ package identity
 import (
 	"time"
 
+	"github.com/cilium/cilium/operator/watchers"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -56,6 +57,11 @@ func (i *IdentityHeartbeatStore) MarkAlive(identity string, t time.Time) {
 func (i *IdentityHeartbeatStore) IsAlive(identity string) bool {
 	i.mutex.RLock()
 	defer i.mutex.RUnlock()
+
+	// The identity is definitely alive if there's a CE using it.
+	if watchers.HasCEWithIdentity(identity) {
+		return true
+	}
 
 	lifesign, ok := i.lastLifesign[identity]
 	if ok {

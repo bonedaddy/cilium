@@ -70,6 +70,7 @@ func identityGCIteration() {
 		return
 	}
 
+	timeNow := time.Now()
 	for _, identityObject := range identityStore.List() {
 		identity, ok := identityObject.(*types.Identity)
 		if !ok {
@@ -84,6 +85,9 @@ func identityGCIteration() {
 				"nodes":            identity.Status.Nodes,
 			}).Debug("Deleting unused identity")
 			deleteIdentity(identity)
+		} else {
+			// If the identity is alive then mark it as alive
+			identityHeartbeat.MarkAlive(identity.Name, timeNow)
 		}
 	}
 
@@ -92,7 +96,7 @@ func identityGCIteration() {
 
 func startCRDIdentityGC() {
 	if operatorOption.Config.EndpointGCInterval == 0 {
-		log.Fatal("The CiliumIdentity garabge collector requires the CiliumEndpoint garbage collector to be enabled")
+		log.Fatal("The CiliumIdentity garbage collector requires the CiliumEndpoint garbage collector to be enabled")
 	}
 
 	log.Infof("Starting CRD identity garbage collector with %s interval...", operatorOption.Config.IdentityGCInterval)
