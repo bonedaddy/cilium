@@ -548,9 +548,9 @@ if [ "$MODE" = "direct" ] || [ "$MODE" = "ipvlan" ] || [ "$MODE" = "routed" ] ||
 			COPTS="${COPTS} -DLB_L3 -DLB_L4 -DDISABLE_LOOPBACK_LB"
 		fi
 
-		bpf_load $NATIVE_DEV "$COPTS" "ingress" bpf_netdev.c bpf_netdev.o "from-netdev" $CALLS_MAP
+		bpf_load $NATIVE_DEV "$COPTS" "ingress" bpf_host.c bpf_host.o "from-netdev" $CALLS_MAP
 		if [ "$NODE_PORT" = "true" ]; then
-			bpf_load $NATIVE_DEV "$COPTS" "egress" bpf_netdev.c bpf_netdev.o "to-netdev" $CALLS_MAP
+			bpf_load $NATIVE_DEV "$COPTS" "egress" bpf_host.c bpf_host.o "to-netdev" $CALLS_MAP
 		else
 			bpf_unload $NATIVE_DEV "egress"
 		fi
@@ -567,12 +567,12 @@ else
 	fi
 fi
 
-# Remove bpf_netdev.o from previously used devices
+# Remove bpf_host.o from previously used devices
 for iface in $(ip -o -a l | awk '{print $2}' | cut -d: -f1 | cut -d@ -f1 | grep -v cilium); do
     [ "$iface" == "$NATIVE_DEV" ] && continue
     for where in ingress egress; do
-        if tc filter show dev "$iface" "$where" | grep -q "bpf_netdev.o"; then
-            echo "Removing bpf_netdev.o from $where of $iface"
+        if tc filter show dev "$iface" "$where" | grep -q "bpf_host.o"; then
+            echo "Removing bpf_host.o from $where of $iface"
             tc filter del dev "$iface" "$where" || true
         fi
     done
@@ -632,9 +632,9 @@ COPTS="-DFROM_HOST -DSECLABEL=${ID_HOST}"
 if [ "$MODE" == "ipvlan" ]; then
 	COPTS+=" -DENABLE_EXTRA_HOST_DEV"
 fi
-bpf_load $HOST_DEV1 "$COPTS" "egress" bpf_netdev.c bpf_host.o from-host $CALLS_MAP
-bpf_load $HOST_DEV1 "" "ingress" bpf_hostdev_ingress.c bpf_hostdev_ingress.o to-host $CALLS_MAP
-bpf_load $HOST_DEV2 "" "ingress" bpf_hostdev_ingress.c bpf_hostdev_ingress.o to-host $CALLS_MAP
+bpf_load $HOST_DEV1 "$COPTS" "egress" bpf_host.c bpf_host.o from-host $CALLS_MAP
+bpf_load $HOST_DEV1 "" "ingress" bpf_host.c bpf_host.o to-host $CALLS_MAP
+bpf_load $HOST_DEV2 "" "ingress" bpf_host.c bpf_host.o to-host $CALLS_MAP
 if [ "$IPSEC" == "true" ]; then
 	if [ "$ENCRYPT_DEV" != "<nil>" ]; then
 		bpf_load $ENCRYPT_DEV "" "ingress" bpf_network.c bpf_network.o from-network $CALLS_MAP
