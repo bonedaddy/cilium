@@ -34,6 +34,7 @@ import (
 	"github.com/cilium/cilium/pkg/common"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/ip"
+	ipamOption "github.com/cilium/cilium/pkg/ipam/option"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
@@ -629,25 +630,6 @@ const (
 
 	// IPAM is the IPAM method to use
 	IPAM = "ipam"
-
-	// IPAMHostScopeLegacy is the value to select the legacy hostscope IPAM mode
-	// This option will disappear in Cilium v1.9
-	IPAMHostScopeLegacy = "hostscope-legacy"
-
-	// IPAMKubernetes is the value to select the Kubernetes PodCIDR based
-	// hostscope IPAM mode
-	IPAMKubernetes = "kubernetes"
-
-	// IPAMCRD is the value to select the CRD-backed IPAM plugin for
-	// option.IPAM
-	IPAMCRD = "crd"
-
-	// IPAMENI is the value to select the AWS ENI IPAM plugin for option.IPAM
-	IPAMENI = "eni"
-
-	// IPAMAzure is the value to select the Azure IPAM plugin for
-	// option.IPAM
-	IPAMAzure = "azure"
 
 	// XDPModeNative for loading progs with XDPModeLinkDriver
 	XDPModeNative = "native"
@@ -1976,7 +1958,7 @@ func (c *DaemonConfig) Validate() error {
 		return fmt.Errorf("MTU '%d' cannot be negative", c.MTU)
 	}
 
-	if c.IPAM == IPAMENI && c.EnableIPv6 {
+	if c.IPAM == ipamOption.IPAMENI && c.EnableIPv6 {
 		return fmt.Errorf("IPv6 cannot be enabled in ENI IPAM mode")
 	}
 
@@ -2408,7 +2390,7 @@ func (c *DaemonConfig) Populate() {
 	}
 
 	switch c.IPAM {
-	case IPAMKubernetes:
+	case ipamOption.IPAMKubernetes:
 		if c.EnableIPv4 {
 			c.K8sRequireIPv4PodCIDR = true
 		}
@@ -2553,7 +2535,7 @@ func (c *DaemonConfig) checkMapSizeLimits() error {
 }
 
 func (c *DaemonConfig) checkIPv4NativeRoutingCIDR() error {
-	if c.IPv4NativeRoutingCIDR() == nil && c.Masquerade && c.Tunnel == TunnelDisabled && c.IPAMMode() != IPAMENI {
+	if c.IPv4NativeRoutingCIDR() == nil && c.Masquerade && c.Tunnel == TunnelDisabled && c.IPAMMode() != ipamOption.IPAMENI {
 		return fmt.Errorf("native routing cidr must be configured with option --%s in combination with --%s --%s=%s --%s=%s",
 			IPv4NativeRoutingCIDR, Masquerade, TunnelName, c.Tunnel, IPAM, c.IPAMMode())
 	}
