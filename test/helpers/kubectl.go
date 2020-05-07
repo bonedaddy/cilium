@@ -2916,36 +2916,64 @@ func (kub *Kubectl) GetCiliumPodOnNodeWithLabel(namespace string, label string) 
 	return kub.GetCiliumPodOnNode(namespace, node)
 }
 
-func (kub *Kubectl) ciliumPreFlightCheck() error {
-	err := kub.ciliumStatusPreFlightCheck()
-	if err != nil {
-		return fmt.Errorf("status is unhealthy: %s", err)
-	}
+func (kub *Kubectl) validateCilium() error {
+	var (
+		wg     sync.WaitGroup
+		errors = make(chan error, 128)
+	)
 
-	err = kub.ciliumControllersPreFlightCheck()
-	if err != nil {
-		return fmt.Errorf("controllers are failing: %s", err)
-	}
+	wg.Add(1)
+	go func() {
+		if err := kub.ciliumStatusPreFlightCheck(); err != nil {
+			errors <- fmt.Errorf("status is unhealthy: %s", err)
+		}
+		wg.Done()
+	}()
+
+	wg.Add(1)
+	go func() {
+		if err := kub.ciliumControllersPreFlightCheck(); err != nil {
+			errors <- fmt.Errorf("controllers are failing: %s", err)
+		}
+		wg.Done()
+	}()
 
 	switch GetCurrentIntegration() {
 	case CIIntegrationFlannel:
 	default:
-		err = kub.ciliumHealthPreFlightCheck()
+		wg.Add(1)
+		go func() {
+			if err := kub.ciliumHealthPreFlightCheck(); err != nil {
+				errors <- fmt.Errorf("connectivity health is failing: %s", err)
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		err := kub.fillServiceCache()
 		if err != nil {
-			return fmt.Errorf("connectivity health is failing: %s", err)
+			errors <- fmt.Errorf("unable to fill service cache: %s", err)
+			return
 		}
-	}
-	err = kub.fillServiceCache()
-	if err != nil {
-		return fmt.Errorf("unable to fill service cache: %s", err)
-	}
-	err = kub.ciliumServicePreFlightCheck()
-	if err != nil {
-		return fmt.Errorf("cilium services are not set up correctly: %s", err)
-	}
-	err = kub.servicePreFlightCheck("kubernetes", "default")
-	if err != nil {
-		return fmt.Errorf("kubernetes service is not ready: %s", err)
+		err = kub.ciliumServicePreFlightCheck()
+		if err != nil {
+			errors <- fmt.Errorf("cilium services are not set up correctly: %s", err)
+			return
+		}
+		err = kub.servicePreFlightCheck("kubernetes", "default")
+		if err != nil {
+			errors <- fmt.Errorf("kubernetes service is not ready: %s", err)
+		}
+	}()
+
+	wg.Wait()
+	select {
+	case err := <-errors:
+		return err
+	default:
 	}
 
 	return nil
@@ -2955,20 +2983,19 @@ func (kub *Kubectl) ciliumPreFlightCheck() error {
 // Cilium are in a good state. If one of the multiple preflight fails it'll
 // return an error.
 func (kub *Kubectl) CiliumPreFlightCheck() error {
-	ginkgoext.By("Performing Cilium preflight check")
+	ginkgoext.By("Validating Cilium Installation")
 	// Doing this withTimeout because the Status can be ready, but the other
 	// nodes cannot be show up yet, and the cilium-health can fail as a false positive.
 	var (
-		lastError           string
+		lastError           error
 		consecutiveFailures int
 	)
 
 	body := func() bool {
-		if err := kub.ciliumPreFlightCheck(); err != nil {
-			newError := err.Error()
-			if lastError != newError || consecutiveFailures >= 5 {
-				ginkgoext.GinkgoPrint("Cilium is not ready yet: %s", newError)
-				lastError = newError
+		if err := kub.validateCilium(); err != nil {
+			if lastError.Error() != err.Error() || consecutiveFailures >= 5 {
+				ginkgoext.By("Cilium is not ready yet: %s", err)
+				lastError = err
 				consecutiveFailures = 0
 			} else {
 				consecutiveFailures++
@@ -2978,9 +3005,8 @@ func (kub *Kubectl) CiliumPreFlightCheck() error {
 		return true
 
 	}
-	timeoutErr := WithTimeout(body, "PreflightCheck failed", &TimeoutConfig{Timeout: HelperTimeout})
-	if timeoutErr != nil {
-		return fmt.Errorf("CiliumPreFlightCheck error: %s: Last polled error: %s", timeoutErr, lastError)
+	if err := RepeatUntilTrue(body, &TimeoutConfig{Timeout: HelperTimeout}); err != nil {
+		return fmt.Errorf("Cilium validation failed: %s: Last polled error: %s", err, lastError)
 	}
 	return nil
 }
