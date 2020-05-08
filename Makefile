@@ -391,6 +391,7 @@ generate-k8s-api:
 	networking:v1\
 	core:v1")
 	$(call generate_k8s_api_deepcopy_deepequal,github.com/cilium/cilium/pkg/k8s/slim/k8s/apis,"$\
+	util:intstr\
 	meta:v1")
 	$(call generate_k8s_api_deepcopy_deepequal,github.com/cilium/cilium/pkg,"$\
 	aws:types\
